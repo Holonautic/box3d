@@ -13,6 +13,40 @@
 
 #include <stdio.h>
 
+// Starworn patch (box3d-experiment): terrain cut into mesh pieces. A piece's
+// triangle with flag bit B3_SEAM_TRIANGLE has the flat bits set on its edges
+// that lie on the piece's border where the same face goes on in the next
+// piece. A contact here cannot see that next mesh, so an edge or vertex
+// contact on such an edge is a ghost of the seam, never a real edge.
+#define B3_SEAM_TRIANGLE 0x80
+static bool b3SeamFeature( int flags, b3TriangleFeature feature )
+{
+	if ( ( flags & B3_SEAM_TRIANGLE ) == 0 )
+	{
+		return false;
+	}
+	bool e1 = ( flags & b3_flatEdge1 ) == b3_flatEdge1;
+	bool e2 = ( flags & b3_flatEdge2 ) == b3_flatEdge2;
+	bool e3 = ( flags & b3_flatEdge3 ) == b3_flatEdge3;
+	switch ( feature )
+	{
+		case b3_featureEdge1:
+			return e1;
+		case b3_featureEdge2:
+			return e2;
+		case b3_featureEdge3:
+			return e3;
+		case b3_featureVertex1:
+			return e1 || e3;
+		case b3_featureVertex2:
+			return e1 || e2;
+		case b3_featureVertex3:
+			return e2 || e3;
+		default:
+			return false;
+	}
+}
+
 #define B3_MAX_POINTS_PER_TRIANGLE 32
 
 #if B3_ENABLE_VALIDATION
@@ -870,6 +904,11 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 		{
 			b3LocalManifold* m = tentativeManifolds[tentativeTriangles[i].index];
 
+			if ( b3SeamFeature( m->triangleFlags, m->feature ) )
+			{
+				continue;
+			}
+
 			bool addedEdge1 = b3AddEdge( &foundEdges, m->i1, m->i2 );
 			bool addedEdge2 = b3AddEdge( &foundEdges, m->i2, m->i3 );
 			bool addedEdge3 = b3AddEdge( &foundEdges, m->i3, m->i1 );
@@ -930,6 +969,14 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 		{
 			b3LocalManifold* m = tentativeManifolds[i];
 			int triangleFlags = m->triangleFlags;
+
+			// A hull's tentative contact on a seam triangle, pushing off the
+			// face's normal: the seam's ghost (`b3SeamFeature`).
+			if ( ( triangleFlags & B3_SEAM_TRIANGLE ) && ( triangleFlags & b3_allFlatEdges ) &&
+				 b3Dot( m->triangleNormal, m->normal ) < 0.99f )
+			{
+				continue;
+			}
 
 			if ( ( triangleFlags & b3_allFlatEdges ) == b3_allFlatEdges )
 			{
